@@ -1,196 +1,156 @@
 #!/bin/bash
 
+# Hide commands and log output
+exec > >(tee -i install.log) 2>&1
 set -e
 
 # Colors
-RED='\e[31m'
-GREEN='\e[32m'
-YELLOW='\e[33m'
-BLUE='\e[34m'
-CYAN='\e[36m'
-RESET='\e[0m'
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
 
-# -------------------------
-# Logo
-# -------------------------
-animate_logo() {
-  clear
-  local logo=(
-   _____   _    _   _____  __      __             __  __ 
-  / ____| | |  | | |_   _| \ \    / /     /\     |  \/  |
- | (___   | |__| |   | |    \ \  / /     /  \    | \  / |
-  \___ \  |  __  |   | |     \ \/ /     / /\ \   | |\/| |
-  ____) | | |  | |  _| |_     \  /     / ____ \  | |  | |
- |_____/  |_|  |_| |_____|     \/     /_/    \_\ |_|  |_|
-  "                                                     "
-   "                                                    "  
-  for line in "${logo[@]}"; do
-    echo -e "${CYAN}${line}${RESET}"
-    sleep 0.05
-  done
-  echo ""
+# ASCII Art
+echo -e "${YELLOW}"
+cat << "EOF"
+
+  ______ __     __  _   _   ______  __   __
+ |___  / \ \   / / | \ | | |  ____| \ \ / /
+    / /   \ \_/ /  |  \| | | |__     \ V / 
+   / /     \   /   | . ` | |  __|     > <  
+  / /__     | |    | |\  | | |____   / . \ 
+ /_____|    |_|    |_| \_| |______| /_/ \_\
+
+
+EOF
+echo -e "${NC}"
+
+TOTAL_STEPS=9
+current_step=0
+
+progress_bar() {
+    current_step=$((current_step + 1))
+    percent=$((current_step * 100 / TOTAL_STEPS))
+    printf "\r${BLUE}[${NC}"
+    for ((i=0; i<percent/2; i++)); do printf "▓"; done
+    for ((i=percent/2; i<50; i++)); do printf " "; done
+    printf "${BLUE}] ${percent}%% ${NC}(${current_step}/${TOTAL_STEPS}) ${GREEN}$1${NC}\n"
 }
 
-# -------------------------
-# Check lib.sh
-# -------------------------
-fn_exists() { declare -F "$1" >/dev/null; }
-
-if ! fn_exists lib_loaded; then
-  # shellcheck source=lib/lib.sh
-  source /tmp/lib.sh || source <(curl -sSL "${GITHUB_BASE_URL}/${GITHUB_SOURCE}/lib/lib.sh")
-  ! fn_exists lib_loaded && echo -e "${RED}* ERROR: Could not load lib script${RESET}" && exit 1
-fi
-
-# ------------------ Variables ----------------- #
-export FQDN=""
-export MYSQL_DB=""
-export MYSQL_USER=""
-export MYSQL_PASSWORD=""
-
-export timezone=""
-export email=""
-
-export user_email=""
-export user_username=""
-export user_firstname=""
-export user_lastname=""
-export user_password=""
-
-export ASSUME_SSL=false
-export CONFIGURE_LETSENCRYPT=false
-export CONFIGURE_FIREWALL=false
-
-# ------------ User input functions ------------ #
-ask_letsencrypt() {
-  if [ "$CONFIGURE_FIREWALL" == false ]; then
-    warning "Let's Encrypt requires port 80/443 to be opened! You opted out of automatic firewall configuration."
-  fi
-
-  echo -n "* Do you want to automatically configure HTTPS using Let's Encrypt? (y/N): "
-  read -r CONFIRM_SSL
-  if [[ "$CONFIRM_SSL" =~ [Yy] ]]; then
-    CONFIGURE_LETSENCRYPT=true
-    ASSUME_SSL=false
-  fi
+execute() {
+    eval "$1" >/dev/null 2>&1
 }
 
-ask_assume_ssl() {
-  output "Let's Encrypt is not going to be automatically configured by this script."
-  output "You can 'assume' SSL, which means the script will configure nginx for Let's Encrypt but not obtain certs."
-  echo -n "* Assume SSL or not? (y/N): "
-  read -r ASSUME_SSL_INPUT
+echo -e "${YELLOW}🚀 Starting Pterodactyl Panel Installation (Codesandbox method)...${NC}\n"
 
-  [[ "$ASSUME_SSL_INPUT" =~ [Yy] ]] && ASSUME_SSL=true
-}
+# Step 1: apt update
+progress_bar "Updating package lists..."
+execute "apt update -y"
 
-check_FQDN_SSL() {
-  if [[ $(invalid_ip "$FQDN") == 1 && $FQDN != 'localhost' ]]; then
-    SSL_AVAILABLE=true
-  else
-    warning "* Let's Encrypt will not be available for IP addresses."
-    output "To use Let's Encrypt, you must use a valid domain name."
-  fi
-}
+# Step 2: Install required packages
+progress_bar "Installing prerequisites..."
+execute "apt install -y apt-transport-https ca-certificates curl software-properties-common"
 
-# ------------------ Main ----------------- #
-main() {
-  if [ -d "/var/www/pterodactyl" ]; then
-    warning "Pterodactyl panel already detected!"
-    echo -n "* Are you sure you want to proceed? (y/N): "
-    read -r CONFIRM_PROCEED
-    if [[ ! "$CONFIRM_PROCEED" =~ [Yy] ]]; then
-      error "Installation aborted!"
-      exit 1
-    fi
-  fi
+# Step 3: Install Docker Compose
+progress_bar "Installing Docker Compose..."
+execute "apt install -y docker-compose"
 
-  animate_logo
-  welcome "panel"
-  check_os_x86_64
+# Step 4: Create directories
+progress_bar "Creating directories..."
+execute "mkdir -p pterodactyl/panel"
+cd pterodactyl/panel
 
-  # DB setup
-  output "Database configuration."
-  MYSQL_DB="-"
-  while [[ "$MYSQL_DB" == *"-"* ]]; do
-    required_input MYSQL_DB "Database name (panel): " "" "panel"
-    [[ "$MYSQL_DB" == *"-"* ]] && error "Database name cannot contain hyphens"
-  done
+# Step 5: Create docker-compose.yml
+progress_bar "Creating docker-compose.yml..."
+cat > docker-compose.yml << 'EOF'
+version: '3.8'
 
-  MYSQL_USER="-"
-  while [[ "$MYSQL_USER" == *"-"* ]]; do
-    required_input MYSQL_USER "Database username (pterodactyl): " "" "pterodactyl"
-    [[ "$MYSQL_USER" == *"-"* ]] && error "Database user cannot contain hyphens"
-  done
+x-common:
+  database:
+    &db-environment
+    MYSQL_PASSWORD: &db-password "CHANGE_ME"
+    MYSQL_ROOT_PASSWORD: "CHANGE_ME_TOO"
+  panel:
+    &panel-environment
+    APP_URL: "https://pterodactyl.example.com"
+    APP_TIMEZONE: "UTC"
+    APP_SERVICE_AUTHOR: "noreply@example.com"
+    TRUSTED_PROXIES: "*"
+  mail:
+    &mail-environment
+    MAIL_FROM: "noreply@example.com"
+    MAIL_DRIVER: "smtp"
+    MAIL_HOST: "mail"
+    MAIL_PORT: "1025"
+    MAIL_USERNAME: ""
+    MAIL_PASSWORD: ""
+    MAIL_ENCRYPTION: "true"
 
-  rand_pw=$(gen_passwd 64)
-  password_input MYSQL_PASSWORD "Password (press enter to use random): " "MySQL password cannot be empty" "$rand_pw"
+services:
+  database:
+    image: mariadb:10.5
+    restart: always
+    command: --default-authentication-plugin=mysql_native_password
+    volumes:
+      - "./data/database:/var/lib/mysql"
+    environment:
+      <<: *db-environment
+      MYSQL_DATABASE: "panel"
+      MYSQL_USER: "pterodactyl"
 
-  # Timezone
-  readarray -t valid_timezones <<<"$(curl -s "$GITHUB_URL/configs/valid_timezones.txt")"
-  output "List of valid timezones: https://www.php.net/manual/en/timezones.php"
-  while [ -z "$timezone" ]; do
-    echo -n "* Select timezone [Europe/Stockholm]: "
-    read -r timezone_input
-    array_contains_element "$timezone_input" "${valid_timezones[@]}" && timezone="$timezone_input"
-    [ -z "$timezone_input" ] && timezone="Europe/Stockholm"
-  done
+  cache:
+    image: redis:alpine
+    restart: always
 
-  # Emails
-  email_input email "Email for Let's Encrypt & panel: " "Email cannot be empty"
-  email_input user_email "Admin account email: " "Email cannot be empty"
-  required_input user_username "Admin username: " "Cannot be empty"
-  required_input user_firstname "Admin firstname: " "Cannot be empty"
-  required_input user_lastname "Admin lastname: " "Cannot be empty"
-  password_input user_password "Admin password: " "Cannot be empty"
+  panel:
+    image: ghcr.io/pterodactyl/panel:latest
+    restart: always
+    ports:
+      - "8030:80"
+      - "4433:443"
+    links:
+      - database
+      - cache
+    volumes:
+      - "./data/var:/app/var"
+      - "./data/nginx:/etc/nginx/http.d"
+      - "./data/certs:/etc/letsencrypt"
+      - "./data/logs:/app/storage/logs"
+    environment:
+      <<: [*panel-environment, *mail-environment]
+      DB_PASSWORD: *db-password
+      APP_ENV: "production"
+      APP_ENVIRONMENT_ONLY: "false"
+      CACHE_DRIVER: "redis"
+      SESSION_DRIVER: "redis"
+      QUEUE_DRIVER: "redis"
+      REDIS_HOST: "cache"
+      DB_HOST: "database"
+      DB_PORT: "3306"
 
-  # FQDN
-  while [ -z "$FQDN" ]; do
-    echo -n "* Set the FQDN (panel.example.com): "
-    read -r FQDN
-    [ -z "$FQDN" ] && error "FQDN cannot be empty"
-  done
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+EOF
 
-  # SSL
-  check_FQDN_SSL
-  ask_firewall CONFIGURE_FIREWALL
-  if [ "$SSL_AVAILABLE" == true ]; then
-    ask_letsencrypt
-    [ "$CONFIGURE_LETSENCRYPT" == false ] && ask_assume_ssl
-  fi
+# Step 6: Create data directories
+progress_bar "Creating data directories..."
+execute "mkdir -p ./data/{database,var,nginx,certs,logs}"
 
-  [ "$CONFIGURE_LETSENCRYPT" == true ] || [ "$ASSUME_SSL" == true ] && \
-    bash <(curl -s "$GITHUB_URL/lib/verify-fqdn.sh") "$FQDN"
+# Step 7: Start containers
+progress_bar "Starting containers..."
+docker-compose up -d
 
-  summary
-  echo -n "* Continue with installation? (y/N): "
-  read -r CONFIRM
-  [[ "$CONFIRM" =~ [Yy] ]] && run_installer "panel" || { error "Installation aborted."; exit 1; }
-}
+# Step 8: Create admin user
+progress_bar "Creating admin user..."
+echo -e "${YELLOW}Please enter admin details when prompted:${NC}"
+docker-compose run --rm panel php artisan p:user:make
 
-summary() {
-  print_brake 62
-  output "Pterodactyl panel installation summary:"
-  output "Database: $MYSQL_DB / $MYSQL_USER / (hidden)"
-  output "Timezone: $timezone"
-  output "Admin: $user_username <$user_email>"
-  output "FQDN: $FQDN"
-  output "Firewall: $CONFIGURE_FIREWALL"
-  output "Let's Encrypt: $CONFIGURE_LETSENCRYPT"
-  output "Assume SSL: $ASSUME_SSL"
-  print_brake 62
-}
-
-goodbye() {
-  print_brake 62
-  output "Panel installation completed."
-  [ "$CONFIGURE_LETSENCRYPT" == true ] && output "Access: https://$FQDN"
-  [ "$ASSUME_SSL" == true ] && output "Assumed SSL enabled; configure certs manually."
-  [ "$ASSUME_SSL" == false ] && [ "$CONFIGURE_LETSENCRYPT" == false ] && output "Access: http://$FQDN"
-  print_brake 62
-}
-
-# Run
-main
-goodbye
-
+# Step 9: Finalize installation
+progress_bar "Finalizing..."
+echo -e "\n${GREEN}✅ Installation Completed Successfully!${NC}"
+echo -e "${BLUE}Access your panel at:${NC} ${YELLOW}http://localhost:8030${NC}"
+echo -e "${RED}⚠️ Remember to change default passwords and configure domain/SSL.${NC}"

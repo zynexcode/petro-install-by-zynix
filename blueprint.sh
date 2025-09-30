@@ -18,7 +18,7 @@ cat << "EOF"
   / /__     | |    | |\  | | |____   / . \ 
  /_____|    |_|    |_| \_| |______| /_/ \_\
                                            
-          🔥 ZYNIX CODE 🔥
+          🔥 zynIX CODE 🔥
 EOF
 }
 
@@ -84,4 +84,5 @@ echo ">>> Running blueprint.sh for RasIN Blueprints..."
 bash blueprint.sh
 
 echo "✅ RasIN Blueprints (RG) setup completed successfully!"
+
 
